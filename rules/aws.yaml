@@ -1,0 +1,20 @@
+rules:
+  - id: aws-access-key-id
+    name: AWS Access Key ID
+    severity: CRITICAL
+    pattern: '(?i)AKIA[0-9A-Z]{16}'
+    tags:
+      - aws
+      - access-key
+
+  - id: aws-secret-access-key
+    name: AWS Secret Access Key
+    severity: CRITICAL
+    pattern: '(?i)(aws[_-]?secret[_-]?access[_-]?key|aws[_-]?secret)\s*[=:]\s*["\x27]?([A-Za-z0-9/+=]{40})["\x27]?'
+    entropy_min: 4.5
+    context_exclude:
+      - "**/*_test.go"
+      - "**/testdata/**"
+    tags:
+      - aws
+      - secret-key

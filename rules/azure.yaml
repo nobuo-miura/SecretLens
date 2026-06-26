@@ -1,0 +1,23 @@
+rules:
+  - id: azure-storage-account-key
+    name: Azure Storage Account Key
+    severity: CRITICAL
+    pattern: '(?i)(AccountKey|StorageKey)\s*[=:]\s*["\x27]?([A-Za-z0-9+/]{86}==)["\x27]?'
+    entropy_min: 4.5
+    context_exclude:
+      - "**/*_test.go"
+      - "**/testdata/**"
+    tags:
+      - azure
+      - storage
+
+  - id: azure-connection-string
+    name: Azure Connection String
+    severity: HIGH
+    pattern: 'DefaultEndpointsProtocol=(https|http);AccountName=[^;]+;AccountKey=[A-Za-z0-9+/]+'
+    context_exclude:
+      - "**/*_test.go"
+      - "**/testdata/**"
+    tags:
+      - azure
+      - connection-string

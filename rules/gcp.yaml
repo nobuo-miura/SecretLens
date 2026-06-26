@@ -1,0 +1,18 @@
+rules:
+  - id: gcp-service-account-key
+    name: GCP Service Account Key
+    severity: CRITICAL
+    pattern: '"type"\s*:\s*"service_account"'
+    context_exclude:
+      - "**/*_test.go"
+    tags:
+      - gcp
+      - service-account
+
+  - id: gcp-api-key
+    name: GCP API Key
+    severity: HIGH
+    pattern: 'AIza[0-9A-Za-z_\-]{35}'
+    tags:
+      - gcp
+      - api-key

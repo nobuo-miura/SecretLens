@@ -1,0 +1,60 @@
+rules:
+  - id: generic-api-key
+    name: Generic API Key
+    severity: HIGH
+    pattern: '(?i)(api[_-]?key|apikey|api[_-]?secret)\s*[=:]\s*["\x27]?([A-Za-z0-9_\-\.]{20,})["\x27]?'
+    entropy_min: 3.5
+    context_exclude:
+      - "**/*_test.go"
+      - "**/testdata/**"
+    tags:
+      - api-key
+      - generic
+
+  - id: generic-password
+    name: Generic Password Assignment
+    severity: MEDIUM
+    pattern: '(?i)(password|passwd|pwd|secret)\s*[=:]\s*["\x27]([^"\x27\s]{8,})["\x27]'
+    entropy_min: 3.0
+    context_exclude:
+      - "**/*_test.go"
+      - "**/testdata/**"
+      - "**/*.md"
+    tags:
+      - password
+      - generic
+
+  - id: generic-token
+    name: Generic Token
+    severity: HIGH
+    pattern: '(?i)(token|access[_-]?token|auth[_-]?token|bearer)\s*[=:]\s*["\x27]?([A-Za-z0-9_\-\.]{20,})["\x27]?'
+    entropy_min: 3.5
+    context_exclude:
+      - "**/*_test.go"
+      - "**/testdata/**"
+    tags:
+      - token
+      - generic
+
+  - id: private-key-header
+    name: Private Key Header
+    severity: CRITICAL
+    pattern: '-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----'
+    context_exclude:
+      - "**/*_test.go"
+      - "**/testdata/**"
+    tags:
+      - private-key
+      - crypto
+
+  - id: generic-connection-string
+    name: Generic Connection String with Password
+    severity: HIGH
+    pattern: '(?i)(postgresql|mysql|mongodb|redis|amqp|smtp)://[^:]+:[^@\s]{6,}@'
+    entropy_min: 3.0
+    context_exclude:
+      - "**/*_test.go"
+      - "**/testdata/**"
+    tags:
+      - connection-string
+      - database

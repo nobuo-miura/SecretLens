@@ -1,0 +1,13 @@
+rules:
+  - id: jwt-token
+    name: JWT Token
+    severity: HIGH
+    pattern: 'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
+    entropy_min: 4.0
+    context_exclude:
+      - "**/*_test.go"
+      - "**/testdata/**"
+    tags:
+      - jwt
+      - token
+      - authentication
