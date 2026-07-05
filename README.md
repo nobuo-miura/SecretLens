@@ -1,6 +1,8 @@
 # SecretLens
 
-> **Git履歴・CIログ・環境変数ファイル・Dockerレイヤー**を対象に、優先度付きアラートを出力するGo製OSSシークレット検出CLI。
+[English](README.md) | [日本語](README.ja.md)
+
+> An open-source secret scanning CLI for Go that scans **Git history, CI logs, environment files, and Docker layers**, then reports prioritized alerts.
 
 [![CI](https://github.com/nobuo-miura/SecretLens/actions/workflows/ci.yml/badge.svg)](https://github.com/nobuo-miura/SecretLens/actions/workflows/ci.yml)
 [![Go Version](https://img.shields.io/badge/go-1.26-blue)](go.mod)
@@ -9,7 +11,7 @@
 
 ---
 
-## インストール
+## Installation
 
 ### go install
 
@@ -17,123 +19,123 @@
 go install github.com/nobuo-miura/SecretLens/cmd/secretlens@latest
 ```
 
-### ソースからビルド
+### Build from source
 
 ```bash
 git clone https://github.com/nobuo-miura/SecretLens.git
 cd SecretLens
-make build        # → bin/secretlens
-make install      # → $GOPATH/bin/secretlens
+make build        # creates bin/secretlens
+make install      # installs to $GOPATH/bin/secretlens
 ```
 
 ---
 
-## クイックスタート
+## Quick Start
 
 ```bash
-# Git履歴 + 環境変数ファイルをスキャン（デフォルト）
+# Scan Git history and environment files (default)
 secretlens scan .
 
-# Git履歴 + 環境変数ファイルを明示的にスキャン
+# Explicitly scan Git history and environment files
 secretlens scan --all .
 
-# CIログをスキャン（GitHub Actions）
+# Scan CI logs from GitHub Actions
 secretlens scan --source=cilog --repo=owner/repo
 
-# Dockerレイヤーをスキャン
+# Scan Docker image layers
 secretlens scan --source=docker --image=myapp:latest
 
-# SARIF形式で出力
+# Write SARIF output
 secretlens scan --format=sarif --out=results.sarif .
 
-# HTMLレポートを生成
+# Generate an HTML report
 secretlens scan --format=html --out=report.html .
 
-# 検出時にCI終了コード1を返す
+# Return exit code 1 when findings meet the severity threshold
 secretlens scan --fail-on=HIGH .
 ```
 
 ---
 
-## コマンドリファレンス
+## Command Reference
 
 ### `secretlens scan`
 
-| フラグ | 説明 | デフォルト |
-|--------|------|-----------|
-| `--all` | Git履歴 + 環境変数ファイルをスキャン | false |
-| `--source` | スキャンソース: `git` `envfile` `cilog` `docker` | git+envfile |
-| `--format` | 出力形式: `text` `json` `sarif` `html` `github-pr` | text |
-| `--out` | 出力ファイルパス（省略時: stdout） | — |
-| `--fail-on` | 指定Severity以上で exit 1: `CRITICAL` `HIGH` `MEDIUM` `LOW` | — |
-| `--rules-dir` | YAMLルールディレクトリ | 実行ファイル隣の `rules/` |
-| `--baseline` | ベースラインファイルパス | `.secretlens.baseline.json` |
-| `--repo` | GitHub リポジトリ `owner/repo`（cilog用） | — |
-| `--image` | Dockerイメージ名（docker用） | — |
-| `--pr` | PRコメントを投稿するPR番号 | — |
-| `--sha` | Check Runを作成するコミットSHA | — |
-| `--github-token` | GitHub APIトークン（`GITHUB_TOKEN`環境変数も可） | — |
-| `--slack-webhook` | Slack Webhook URL（`SLACK_WEBHOOK_URL`環境変数も可） | — |
-| `--verify` | Live API検証を実行（opt-in） | false |
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--all` | Scan Git history and environment files | false |
+| `--source` | Scan source: `git` `envfile` `cilog` `docker` | git+envfile |
+| `--format` | Output format: `text` `json` `sarif` `html` `github-pr` | text |
+| `--out` | Output file path. Writes to stdout when omitted | - |
+| `--fail-on` | Exit with code 1 at or above severity: `CRITICAL` `HIGH` `MEDIUM` `LOW` | - |
+| `--rules-dir` | Directory containing YAML rules | `rules/` next to the executable |
+| `--baseline` | Baseline file path | `.secretlens.baseline.json` |
+| `--repo` | GitHub repository in `owner/repo` format, used by `cilog` | - |
+| `--image` | Docker image name, used by `docker` | - |
+| `--pr` | Pull request number for posting a PR comment | - |
+| `--sha` | Commit SHA for creating a Check Run | - |
+| `--github-token` | GitHub API token. `GITHUB_TOKEN` is also supported | - |
+| `--slack-webhook` | Slack webhook URL. `SLACK_WEBHOOK_URL` is also supported | - |
+| `--verify` | Run live API verification for detected secrets (opt-in) | false |
 
 ### `secretlens org`
 
-GitHub Organization全リポジトリを並列横断スキャンする。
+Scan all repositories in a GitHub Organization concurrently.
 
 ```bash
 secretlens org --org=my-company --format=html --out=audit.html
 ```
 
-| フラグ | 説明 | デフォルト |
-|--------|------|-----------|
-| `--org` | GitHub Organization名（必須） | — |
-| `--token` | GitHub APIトークン（`GITHUB_TOKEN`環境変数も可） | — |
-| `--concurrency` | 並列スキャン数 | 4 |
-| `--format` | 出力形式: `text` `json` `html` | text |
-| `--out` | 出力ファイルパス | — |
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--org` | GitHub Organization name (required) | - |
+| `--token` | GitHub API token. `GITHUB_TOKEN` is also supported | - |
+| `--concurrency` | Number of concurrent scans | 4 |
+| `--format` | Output format: `text` `json` `html` | text |
+| `--out` | Output file path | - |
 
 ### `secretlens baseline`
 
 ```bash
-secretlens baseline list            # 登録済みfingerprint一覧
-secretlens baseline update          # ベースライン更新ガイドを表示
+secretlens baseline list            # list registered fingerprints
+secretlens baseline update          # show baseline update guidance
 ```
 
 ### `secretlens rules list`
 
 ```bash
-secretlens rules list               # 有効ルール一覧（ID / Severity / 名前）
+secretlens rules list               # list enabled rules with ID, severity, and name
 ```
 
 ---
 
-## スコアリングと優先度
+## Scoring and Severity
 
-検出された各シークレットにはスコアが付与され、Severityに変換されます。
+Each finding receives a score, which is then mapped to a severity level.
 
-| 条件 | スコア |
-|------|--------|
-| ベースルール: CRITICAL | +60 |
-| ベースルール: HIGH | +40 |
-| ベースルール: MEDIUM | +20 |
-| Live検証通過 | +50 |
-| エントロピー > 4.5 | +20 |
-| センシティブファイル名 (`.env`, `credentials` 等) | +15 |
-| テストコード内 | -30 |
-| コメント行 | -20 |
+| Condition | Score |
+|-----------|-------|
+| Base rule: CRITICAL | +60 |
+| Base rule: HIGH | +40 |
+| Base rule: MEDIUM | +20 |
+| Live verification passed | +50 |
+| Entropy > 4.5 | +20 |
+| Sensitive file name such as `.env` or `credentials` | +15 |
+| Test code | -30 |
+| Comment line | -20 |
 
-| スコア | Severity |
-|--------|----------|
-| 60以上 | 🔴 CRITICAL |
-| 40〜59 | 🟠 HIGH |
-| 20〜39 | 🟡 MEDIUM |
-| 未満 | 🔵 LOW |
+| Score | Severity |
+|-------|----------|
+| 60 or higher | CRITICAL |
+| 40-59 | HIGH |
+| 20-39 | MEDIUM |
+| Below 20 | LOW |
 
 ---
 
-## カスタムルール
+## Custom Rules
 
-`rules/` 以下にYAMLファイルを追加することでルールを拡張できます。
+Add YAML files under `rules/` to extend the rule set.
 
 ```yaml
 # rules/my-company.yaml
@@ -151,29 +153,29 @@ rules:
       - internal
 ```
 
-### ルールスキーマ
+### Rule Schema
 
-| フィールド | 型 | 説明 |
-|-----------|-----|------|
-| `id` | string | ユニークID（必須） |
-| `name` | string | 表示名（必須） |
-| `severity` | string | `CRITICAL` `HIGH` `MEDIUM` `LOW`（必須） |
-| `pattern` | string | Go regexp 構文の正規表現（必須） |
-| `entropy_min` | float | 最低エントロピー閾値（省略可） |
-| `context_exclude` | []string | 除外globパターン（省略可） |
-| `tags` | []string | タグ（省略可） |
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique rule ID (required) |
+| `name` | string | Display name (required) |
+| `severity` | string | `CRITICAL` `HIGH` `MEDIUM` `LOW` (required) |
+| `pattern` | string | Regular expression using Go regexp syntax (required) |
+| `entropy_min` | float | Minimum entropy threshold (optional) |
+| `context_exclude` | []string | Exclusion glob patterns (optional) |
+| `tags` | []string | Tags (optional) |
 
 ---
 
-## ベースライン管理
+## Baseline Management
 
-誤検知をベースラインに登録して以降のスキャンで除外できます。
+Add known false positives to a baseline file so future scans can ignore them.
 
 ```bash
-# fingerprintを確認
+# Inspect fingerprints
 secretlens scan --format=json . | jq -r '.[].fingerprint'
 
-# .secretlens.baseline.json を手動編集して追加
+# Add fingerprints manually to .secretlens.baseline.json
 {
   "fingerprints": {
     "abc123...": true
@@ -183,7 +185,7 @@ secretlens scan --format=json . | jq -r '.[].fingerprint'
 
 ---
 
-## GitHub Actions 連携
+## GitHub Actions Integration
 
 ```yaml
 # .github/workflows/secretlens.yml
@@ -197,7 +199,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Git履歴を全取得
+          fetch-depth: 0  # fetch full Git history
 
       - uses: actions/setup-go@v5
         with:
@@ -239,10 +241,10 @@ jobs:
 
 ---
 
-## ビルトインルール
+## Built-in Rules
 
-| ファイル | カバー範囲 |
-|---------|-----------|
+| File | Coverage |
+|------|----------|
 | `rules/aws.yaml` | AWS Access Key ID / Secret Access Key |
 | `rules/gcp.yaml` | GCP Service Account Key / API Key |
 | `rules/azure.yaml` | Azure Storage Account Key / Connection String |
@@ -251,47 +253,47 @@ jobs:
 
 ---
 
-## 開発
+## Development
 
 ```bash
-make test           # テスト実行
-make check          # vet + test + lint
-make run-scan       # サンプルスキャン
-make report-html    # HTMLレポートを生成してブラウザで開く
-make release        # 主要プラットフォーム向けクロスコンパイル
-make help           # コマンド一覧
+make test           # run tests
+make check          # run vet, tests, and lint
+make run-scan       # run a sample scan
+make report-html    # generate and open an HTML report
+make release        # cross-compile for major platforms
+make help           # show available commands
 ```
 
-### ディレクトリ構成
+### Directory Layout
 
-```
+```text
 secretlens/
-├── cmd/secretlens/          # CLIエントリポイント (cobra)
-├── internal/
-│   ├── scanner/
-│   │   ├── git/             # git log --all -p ストリーミング解析
-│   │   ├── cilog/           # GitHub Actions / GitLab CI ログAPI
-│   │   ├── envfile/         # .env / .tfvars / *.yaml スキャン
-│   │   └── docker/          # Dockerイメージレイヤー展開スキャン
-│   ├── detector/
-│   │   ├── regex/           # YAMLルール読み込み + 正規表現マッチ
-│   │   ├── entropy/         # Shannon entropy 計算
-│   │   ├── context/         # テストコード / コメント除外
-│   │   └── verifier/        # Live API検証 (AWS / GCP / GitHub)
-│   ├── finding/             # Finding構造体 + スコアリング
-│   ├── reporter/
-│   │   ├── sarif/           # SARIF v2.1.0 出力
-│   │   ├── github/          # PRコメント + Check Run API
-│   │   ├── slack/           # Webhook通知 (Block Kit)
-│   │   └── html/            # インタラクティブHTMLレポート
-│   ├── baseline/            # .secretlens.baseline.json 管理
-│   └── org/                 # GitHub Org横断監査モード
-├── rules/                   # ビルトインYAMLルール
-└── testdata/                # テスト用サンプルファイル
+|-- cmd/secretlens/          # CLI entrypoint (cobra)
+|-- internal/
+|   |-- scanner/
+|   |   |-- git/             # streaming parser for git log --all -p
+|   |   |-- cilog/           # GitHub Actions / GitLab CI log APIs
+|   |   |-- envfile/         # scan .env / .tfvars / *.yaml files
+|   |   `-- docker/          # scan Docker image layers
+|   |-- detector/
+|   |   |-- regex/           # YAML rule loading and regex matching
+|   |   |-- entropy/         # Shannon entropy calculation
+|   |   |-- context/         # exclude test code and comments
+|   |   `-- verifier/        # live API verification for AWS / GCP / GitHub
+|   |-- finding/             # Finding type and scoring
+|   |-- reporter/
+|   |   |-- sarif/           # SARIF v2.1.0 output
+|   |   |-- github/          # PR comments and Check Run API
+|   |   |-- slack/           # Slack webhook notifications (Block Kit)
+|   |   `-- html/            # interactive HTML reports
+|   |-- baseline/            # .secretlens.baseline.json management
+|   `-- org/                 # GitHub Organization audit mode
+|-- rules/                   # built-in YAML rules
+`-- testdata/                # sample files for tests
 ```
 
 ---
 
-## ライセンス
+## License
 
 MIT License
