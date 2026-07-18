@@ -57,10 +57,10 @@ func (r *Reporter) CreateCheckRun(ctx context.Context, sha string, findings []fi
 	text := formatCheckRunText(findings)
 
 	opts := gogithub.CreateCheckRunOptions{
-		Name:       "SecretLens Secret Scan",
-		HeadSHA:    sha,
-		Status:     gogithub.Ptr(status),
-		Conclusion: gogithub.Ptr(conclusion),
+		Name:        "SecretLens Secret Scan",
+		HeadSHA:     sha,
+		Status:      gogithub.Ptr(status),
+		Conclusion:  gogithub.Ptr(conclusion),
 		CompletedAt: &gogithub.Timestamp{Time: time.Now()},
 		Output: &gogithub.CheckRunOutput{
 			Title:   gogithub.Ptr("SecretLens Scan Results"),

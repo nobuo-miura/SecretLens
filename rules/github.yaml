@@ -1,0 +1,13 @@
+rules:
+  - id: github-token
+    name: GitHub Token
+    severity: CRITICAL
+    pattern: '(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}'
+    verify:
+      type: github-token
+    context_exclude:
+      - "**/*_test.go"
+      - "**/testdata/**"
+    tags:
+      - github
+      - token

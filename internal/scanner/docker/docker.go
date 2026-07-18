@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -13,16 +14,22 @@ import (
 )
 
 type FileLine struct {
-	Image  string
-	Layer  string
-	File   string
-	Line   int
-	Text   string
+	Image string
+	Layer string
+	File  string
+	Line  int
+	Text  string
 }
 
-// StreamLayers は `docker save` でイメージを展開してファイル内容を行単位で返す
+// maxFileSize はレイヤー内の1ファイルあたりのスキャン上限。超過ファイルは
+// 途中切り捨てだと壊れた行を誤検出し得るため、まるごとスキップする
+const maxFileSize = 1024 * 1024
+
+// StreamLayers は `docker save` の出力をストリーミング解析してファイル内容を行単位で返す
 func StreamLayers(image string, out chan<- FileLine) error {
 	cmd := exec.Command("docker", "save", image)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("docker save パイプ作成失敗: %w", err)
@@ -30,85 +37,104 @@ func StreamLayers(image string, out chan<- FileLine) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("docker save 起動失敗（Dockerが起動していますか？）: %w", err)
 	}
-	defer func() { _ = cmd.Wait() }()
 
-	return parseTar(image, tar.NewReader(stdout), out)
+	parseErr := parseTar(image, tar.NewReader(stdout), out)
+	// 残りを読み捨ててからWaitしないとdocker saveがパイプ書き込みでブロックする
+	_, _ = io.Copy(io.Discard, stdout)
+	if err := cmd.Wait(); err != nil {
+		return errors.Join(fmt.Errorf("docker save 失敗: %w: %s", err, strings.TrimSpace(stderr.String())), parseErr)
+	}
+	return parseErr
 }
 
+// parseTar はdocker saveのtarをストリーミングで走査し、レイヤーtarを順次解析する。
+// legacy形式（<id>/layer.tar）とOCI形式（blobs/sha256/<digest>）の両方に対応するため、
+// エントリ名ではなく先頭バイトのマジックナンバーでレイヤーtarを判別する
 func parseTar(image string, tr *tar.Reader, out chan<- FileLine) error {
-	// 全エントリをメモリに読み込んでマニフェストを先に処理する
-	type entry struct {
-		header *tar.Header
-		data   []byte
-	}
-	var entries []entry
-
+	var layerErrs []error
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("tar読み込みエラー: %w", err)
+			layerErrs = append(layerErrs, fmt.Errorf("tar読み込みエラー: %w", err))
+			break
 		}
-		data, err := io.ReadAll(io.LimitReader(tr, 50*1024*1024)) // 50MB上限/ファイル
-		if err != nil {
-			return err
+		if hdr.Typeflag != tar.TypeReg {
+			continue
 		}
-		entries = append(entries, entry{hdr, data})
-	}
 
-	// layer.tar / layer.tar.gz を解析
-	for _, e := range entries {
-		name := filepath.ToSlash(e.header.Name)
-		if !strings.HasSuffix(name, "/layer.tar") && !strings.HasSuffix(name, ".tar") {
-			continue
+		br := bufio.NewReader(tr)
+		gzipped, isTar := detectLayerFormat(br)
+		if !isTar {
+			continue // manifest.json / config json など
 		}
-		layerName := filepath.Base(filepath.Dir(name))
-		if err := parseLayerTar(image, layerName, bytes.NewReader(e.data), out); err != nil {
-			continue
+		if err := parseLayerTar(image, layerDisplayName(hdr.Name), br, gzipped, out); err != nil {
+			layerErrs = append(layerErrs, fmt.Errorf("レイヤー %s 解析失敗: %w", hdr.Name, err))
 		}
 	}
-	return nil
+	return errors.Join(layerErrs...)
 }
 
-func parseLayerTar(image, layer string, r io.Reader, out chan<- FileLine) error {
-	// gzip圧縮の場合は展開
-	reader := r
-	peek := make([]byte, 2)
-	buf := &bytes.Buffer{}
-	tee := io.TeeReader(r, buf)
-	if n, _ := tee.Read(peek); n == 2 && peek[0] == 0x1f && peek[1] == 0x8b {
-		gz, err := gzip.NewReader(io.MultiReader(bytes.NewReader(peek), buf, r))
-		if err == nil {
-			reader = gz
-			defer func() { _ = gz.Close() }()
+// detectLayerFormat は先頭バイトからgzip/tarを判別する。読み込み位置は進めない
+func detectLayerFormat(br *bufio.Reader) (gzipped, isTar bool) {
+	magic, err := br.Peek(2)
+	if err == nil && magic[0] == 0x1f && magic[1] == 0x8b {
+		return true, true // gzipはレイヤーtar.gzとみなす（中身は展開後にtarとして検証される）
+	}
+	// tarマジック: オフセット257から "ustar"
+	head, err := br.Peek(262)
+	if err != nil {
+		return false, false
+	}
+	return false, bytes.Equal(head[257:262], []byte("ustar"))
+}
+
+func layerDisplayName(entryName string) string {
+	name := filepath.ToSlash(entryName)
+	if strings.HasSuffix(name, "/layer.tar") {
+		return filepath.Base(filepath.Dir(name)) // legacy: <id>/layer.tar
+	}
+	return filepath.Base(name) // OCI: blobs/sha256/<digest>
+}
+
+func parseLayerTar(image, layer string, r io.Reader, gzipped bool, out chan<- FileLine) error {
+	if gzipped {
+		gz, err := gzip.NewReader(r)
+		if err != nil {
+			return fmt.Errorf("gzip展開失敗: %w", err)
 		}
-	} else {
-		reader = io.MultiReader(bytes.NewReader(peek), buf, r)
+		defer func() { _ = gz.Close() }()
+		r = gz
 	}
 
-	tr := tar.NewReader(reader)
+	var fileErrs []error
+	tr := tar.NewReader(r)
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return err
+			fileErrs = append(fileErrs, fmt.Errorf("レイヤーtar読み込みエラー: %w", err))
+			break
 		}
-		if !isTextTarget(hdr.Name) {
+		if hdr.Typeflag != tar.TypeReg || !isTextTarget(hdr.Name) {
+			continue
+		}
+		if hdr.Size > maxFileSize {
 			continue
 		}
 		if err := scanFileLines(image, layer, hdr.Name, tr, out); err != nil {
-			continue
+			fileErrs = append(fileErrs, fmt.Errorf("%s スキャン失敗: %w", hdr.Name, err))
 		}
 	}
-	return nil
+	return errors.Join(fileErrs...)
 }
 
 func scanFileLines(image, layer, filePath string, r io.Reader, out chan<- FileLine) error {
-	data, err := io.ReadAll(io.LimitReader(r, 1024*1024)) // 1MB上限/ファイル
+	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
@@ -149,4 +175,3 @@ func isTextTarget(path string) bool {
 	}
 	return false
 }
-

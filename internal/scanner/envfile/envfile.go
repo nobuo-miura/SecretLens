@@ -27,10 +27,10 @@ var targetExtensions = map[string]bool{
 }
 
 var sensitiveFileNames = map[string]bool{
-	".env":         true,
-	"credentials":  true,
-	"secrets":      true,
-	"secret":       true,
+	".env":        true,
+	"credentials": true,
+	"secrets":     true,
+	"secret":      true,
 }
 
 // ScanFile は単一ファイルを行単位でスキャンしてLineを返す

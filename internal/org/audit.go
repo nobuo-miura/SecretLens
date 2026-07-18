@@ -1,17 +1,21 @@
 package org
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	gogithub "github.com/google/go-github/v72/github"
 	"golang.org/x/oauth2"
 
+	"github.com/nobuo-miura/SecretLens/internal/detector/regex"
 	"github.com/nobuo-miura/SecretLens/internal/finding"
 	"github.com/nobuo-miura/SecretLens/internal/scanner"
 )
@@ -20,7 +24,7 @@ import (
 type AuditOptions struct {
 	Token       string
 	Org         string
-	RulesDir    string
+	Rules       []regex.Rule
 	WorkDir     string // リポジトリをクローンする作業ディレクトリ
 	Concurrency int
 	FailOn      string
@@ -50,7 +54,8 @@ func AuditOrg(ctx context.Context, opts AuditOptions) ([]RepoResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("Org %s: %d リポジトリをスキャンします\n", opts.Org, len(repos))
+	// 進捗はstderrへ出す（--format=jsonのstdout出力を汚染しないため）
+	fmt.Fprintf(os.Stderr, "Org %s: %d リポジトリをスキャンします\n", opts.Org, len(repos))
 
 	workDir := opts.WorkDir
 	if workDir == "" {
@@ -116,9 +121,9 @@ func listOrgRepos(ctx context.Context, client *gogithub.Client, org string) ([]s
 
 func scanRepo(ctx context.Context, opts AuditOptions, workDir, repoName string) ([]finding.Finding, error) {
 	repoDir := filepath.Join(workDir, repoName)
-	cloneURL := fmt.Sprintf("https://x-access-token:%s@github.com/%s/%s.git", opts.Token, opts.Org, repoName)
+	cloneURL := fmt.Sprintf("https://github.com/%s/%s.git", opts.Org, repoName)
 
-	if err := cloneRepoShallow(ctx, cloneURL, repoDir); err != nil {
+	if err := cloneRepo(ctx, cloneURL, repoDir, opts.Token); err != nil {
 		return nil, fmt.Errorf("リポジトリクローン失敗 %s: %w", repoName, err)
 	}
 	defer func() { _ = os.RemoveAll(repoDir) }()
@@ -126,7 +131,7 @@ func scanRepo(ctx context.Context, opts AuditOptions, workDir, repoName string) 
 	scanOpts := scanner.Options{
 		Source:       "all",
 		RepoPath:     repoDir,
-		RulesDir:     opts.RulesDir,
+		Rules:        opts.Rules,
 		BaselineFile: filepath.Join(repoDir, ".secretlens.baseline.json"),
 		Format:       "json",
 		FailOn:       opts.FailOn,
@@ -134,9 +139,23 @@ func scanRepo(ctx context.Context, opts AuditOptions, workDir, repoName string) 
 	return scanner.Run(scanOpts)
 }
 
-// cloneRepoShallow はgit clone --depth=1でシャロークローンを実行する
-func cloneRepoShallow(ctx context.Context, cloneURL, dir string) error {
-	cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", cloneURL, dir)
+// cloneRepo は全履歴をクローンする（履歴スキャンのためシャロークローンにしない）。
+// トークンはURLやプロセス引数に載せず、環境変数経由のhttp.extraheaderで渡す
+func cloneRepo(ctx context.Context, cloneURL, dir, token string) error {
+	cmd := exec.CommandContext(ctx, "git", "clone", "--quiet", cloneURL, dir)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	return cmd.Run()
+	if token != "" {
+		basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
+		cmd.Env = append(cmd.Env,
+			"GIT_CONFIG_COUNT=1",
+			"GIT_CONFIG_KEY_0=http.https://github.com/.extraheader",
+			"GIT_CONFIG_VALUE_0=Authorization: Basic "+basic,
+		)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
 }

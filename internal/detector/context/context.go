@@ -3,6 +3,8 @@ package context
 import (
 	"path/filepath"
 	"strings"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 var commentPrefixes = []string{"//", "#", "/*", "*", "<!--"}
@@ -33,15 +35,13 @@ func IsCommentLine(line string) bool {
 	return false
 }
 
-// MatchesExcludePattern はファイルパスが除外パターンにマッチするかを判定する
+// MatchesExcludePattern はファイルパスが除外パターンにマッチするかを判定する。
+// doublestarにより `**` はゼロ個以上のパスセグメントにマッチする
+// （例: `**/testdata/**` はルート直下の `testdata/sample.env` にもマッチ）
 func MatchesExcludePattern(path string, patterns []string) bool {
+	p := strings.TrimPrefix(filepath.ToSlash(path), "./")
 	for _, pattern := range patterns {
-		// **/ プレフィックスを除いたシンプルなglobマッチ
-		clean := strings.TrimPrefix(pattern, "**/")
-		if matched, _ := filepath.Match(clean, filepath.Base(path)); matched {
-			return true
-		}
-		if matched, _ := filepath.Match(pattern, path); matched {
+		if matched, _ := doublestar.Match(pattern, p); matched {
 			return true
 		}
 	}

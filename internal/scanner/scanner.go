@@ -10,27 +10,24 @@ import (
 	"github.com/nobuo-miura/SecretLens/internal/detector/entropy"
 	"github.com/nobuo-miura/SecretLens/internal/detector/regex"
 	"github.com/nobuo-miura/SecretLens/internal/finding"
-	gitscanner "github.com/nobuo-miura/SecretLens/internal/scanner/git"
 	"github.com/nobuo-miura/SecretLens/internal/scanner/envfile"
+	gitscanner "github.com/nobuo-miura/SecretLens/internal/scanner/git"
 )
 
 type Options struct {
-	Source    string // "git" | "envfile" | "all"
-	RepoPath  string
-	RulesDir  string
+	Source       string // "git" | "envfile" | "all"（空は"all"扱い）
+	RepoPath     string
+	Rules        []regex.Rule
 	BaselineFile string
-	Format    string // "sarif" | "json" | "text"
-	FailOn    string // "CRITICAL" | "HIGH" | "MEDIUM" | "LOW"
+	Format       string // "sarif" | "json" | "text"
+	FailOn       string // "CRITICAL" | "HIGH" | "MEDIUM" | "LOW"
 }
 
 // Run はスキャンを実行してFinding一覧を返す
 func Run(opts Options) ([]finding.Finding, error) {
-	rules, err := regex.LoadRulesFromDir(opts.RulesDir)
-	if err != nil {
-		return nil, fmt.Errorf("ルール読み込み失敗: %w", err)
-	}
+	rules := opts.Rules
 	if len(rules) == 0 {
-		return nil, fmt.Errorf("有効なルールが見つかりません: %s", opts.RulesDir)
+		return nil, fmt.Errorf("有効なルールが指定されていません")
 	}
 
 	bl, err := baseline.Load(opts.BaselineFile)
@@ -39,19 +36,24 @@ func Run(opts Options) ([]finding.Finding, error) {
 	}
 
 	var findings []finding.Finding
+	seen := map[string]bool{} // git履歴とenvfileで同じ検出が重複するのを防ぐ
 	idCounter := 0
 
 	addFinding := func(f finding.Finding) {
-		if bl.Contains(f.Fingerprint) {
+		if bl.Contains(f.Fingerprint) || seen[f.Fingerprint] {
 			return
 		}
+		seen[f.Fingerprint] = true
 		idCounter++
 		f.ID = fmt.Sprintf("SL-%04d", idCounter)
 		findings = append(findings, f)
 	}
 
-	switch opts.Source {
-	case "git", "all":
+	source := opts.Source
+	if source == "" {
+		source = "all"
+	}
+	if source == "git" || source == "all" {
 		gitFindings, err := scanGit(opts.RepoPath, rules)
 		if err != nil {
 			return nil, err
@@ -59,27 +61,8 @@ func Run(opts Options) ([]finding.Finding, error) {
 		for _, f := range gitFindings {
 			addFinding(f)
 		}
-		if opts.Source != "all" {
-			break
-		}
-		fallthrough
-	case "envfile":
-		envFindings, err := scanEnvfile(opts.RepoPath, rules)
-		if err != nil {
-			return nil, err
-		}
-		for _, f := range envFindings {
-			addFinding(f)
-		}
-	default:
-		// デフォルト: git + envfile
-		gitFindings, err := scanGit(opts.RepoPath, rules)
-		if err != nil {
-			return nil, err
-		}
-		for _, f := range gitFindings {
-			addFinding(f)
-		}
+	}
+	if source == "envfile" || source == "all" {
 		envFindings, err := scanEnvfile(opts.RepoPath, rules)
 		if err != nil {
 			return nil, err
@@ -125,7 +108,12 @@ func scoreAndBuild(rule regex.Rule, source, file string, line int, matched, comm
 	}
 
 	masked := finding.MaskSecret(matched)
-	fp := finding.ComputeFingerprint(rule.ID, file, line, matched)
+	fp := finding.ComputeFingerprint(rule.ID, file, matched)
+
+	verifyType := ""
+	if rule.Verify != nil {
+		verifyType = rule.Verify.Type
+	}
 
 	f := finding.Finding{
 		RuleID:      rule.ID,
@@ -136,6 +124,8 @@ func scoreAndBuild(rule regex.Rule, source, file string, line int, matched, comm
 		Match:       masked,
 		Commit:      commit,
 		Fingerprint: fp,
+		Secret:      matched, // Live検証専用。出力前に必ずクリアされる
+		VerifyType:  verifyType,
 	}
 	f.Severity = finding.ScoreToSeverity(score)
 	return f

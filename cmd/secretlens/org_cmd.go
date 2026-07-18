@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -49,15 +50,19 @@ func runOrgAudit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("GitHub APIトークンが必要です（--token または GITHUB_TOKEN 環境変数）")
 	}
 
-	rulesDir := flagRulesDir
-	if rulesDir == "" {
-		rulesDir = resolveRulesDir(".")
+	if flagOrgFormat != "text" && flagOrgFormat != "json" && flagOrgFormat != "html" {
+		return fmt.Errorf("不正な --format です: %q (text|json|html)", flagOrgFormat)
+	}
+
+	rules, err := loadRules(flagRulesDir)
+	if err != nil {
+		return err
 	}
 
 	opts := org.AuditOptions{
 		Token:       token,
 		Org:         flagOrgName,
-		RulesDir:    rulesDir,
+		Rules:       rules,
 		Concurrency: flagConcurrency,
 	}
 
@@ -93,26 +98,26 @@ func outputOrgResults(results []org.RepoResult, orgName string) error {
 		}
 		return reporthtml.Write(out, allFindings, orgName)
 	default:
-		printOrgText(results)
+		printOrgText(out, results)
 	}
 	return nil
 }
 
-func printOrgText(results []org.RepoResult) {
+func printOrgText(out io.Writer, results []org.RepoResult) {
 	total := 0
 	for _, r := range results {
 		if r.Err != nil {
-			fmt.Printf("  [ERROR] %s: %v\n", r.Repo, r.Err)
+			_, _ = fmt.Fprintf(out, "  [ERROR] %s: %v\n", r.Repo, r.Err)
 			continue
 		}
 		if len(r.Findings) == 0 {
 			continue
 		}
-		fmt.Printf("\n=== %s (%d件) ===\n", r.Repo, len(r.Findings))
+		_, _ = fmt.Fprintf(out, "\n=== %s (%d件) ===\n", r.Repo, len(r.Findings))
 		for _, f := range r.Findings {
-			fmt.Printf("  [%s] %s:%d  rule=%s\n", f.Severity, f.File, f.Line, f.RuleID)
+			_, _ = fmt.Fprintf(out, "  [%s] %s:%d  rule=%s\n", f.Severity, f.File, f.Line, f.RuleID)
 		}
 		total += len(r.Findings)
 	}
-	fmt.Printf("\n合計: %d件 (%d リポジトリ)\n", total, len(results))
+	_, _ = fmt.Fprintf(out, "\n合計: %d件 (%d リポジトリ)\n", total, len(results))
 }

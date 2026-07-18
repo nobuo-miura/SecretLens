@@ -64,19 +64,21 @@ secretlens scan --fail-on=HIGH .
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--all` | Scan Git history and environment files | false |
-| `--source` | Scan source: `git` `envfile` `cilog` `docker` | git+envfile |
+| `--source` | Scan source: `git` `envfile` `all` `cilog` `docker` | git+envfile |
 | `--format` | Output format: `text` `json` `sarif` `html` `github-pr` | text |
 | `--out` | Output file path. Writes to stdout when omitted | - |
 | `--fail-on` | Exit with code 1 at or above severity: `CRITICAL` `HIGH` `MEDIUM` `LOW` | - |
-| `--rules-dir` | Directory containing YAML rules | `rules/` next to the executable |
+| `--rules-dir` | Directory of additional / overriding YAML rules | none (embedded rules only) |
 | `--baseline` | Baseline file path | `.secretlens.baseline.json` |
 | `--repo` | GitHub repository in `owner/repo` format, used by `cilog` | - |
+| `--gitlab-url` | GitLab instance URL, used by `cilog` | - |
+| `--project-id` | GitLab project ID, used by `cilog` | - |
 | `--image` | Docker image name, used by `docker` | - |
 | `--pr` | Pull request number for posting a PR comment | - |
 | `--sha` | Commit SHA for creating a Check Run | - |
 | `--github-token` | GitHub API token. `GITHUB_TOKEN` is also supported | - |
 | `--slack-webhook` | Slack webhook URL. `SLACK_WEBHOOK_URL` is also supported | - |
-| `--verify` | Run live API verification for detected secrets (opt-in) | false |
+| `--verify` | Run live API verification for supported rules (opt-in; currently GitHub tokens only) | false |
 
 ### `secretlens org`
 
@@ -93,12 +95,13 @@ secretlens org --org=my-company --format=html --out=audit.html
 | `--concurrency` | Number of concurrent scans | 4 |
 | `--format` | Output format: `text` `json` `html` | text |
 | `--out` | Output file path | - |
+| `--rules-dir` | Directory of additional / overriding YAML rules | none (embedded rules only) |
 
 ### `secretlens baseline`
 
 ```bash
+secretlens baseline update .        # scan and add all current findings to the baseline
 secretlens baseline list            # list registered fingerprints
-secretlens baseline update          # show baseline update guidance
 ```
 
 ### `secretlens rules list`
@@ -119,10 +122,11 @@ Each finding receives a score, which is then mapped to a severity level.
 | Base rule: HIGH | +40 |
 | Base rule: MEDIUM | +20 |
 | Live verification passed | +50 |
-| Entropy > 4.5 | +20 |
+| Entropy at or above the rule's `entropy_min` (or > 4.5 when unset) | +20 |
 | Sensitive file name such as `.env` or `credentials` | +15 |
 | Test code | -30 |
-| Comment line | -20 |
+
+Comment lines are skipped entirely and never produce findings.
 
 | Score | Severity |
 |-------|----------|
@@ -135,7 +139,7 @@ Each finding receives a score, which is then mapped to a severity level.
 
 ## Custom Rules
 
-Add YAML files under `rules/` to extend the rule set.
+Standard rules are embedded in the binary. Put YAML files in any directory and pass it via `--rules-dir` to add rules (same IDs override embedded ones).
 
 ```yaml
 # rules/my-company.yaml
@@ -172,7 +176,13 @@ rules:
 Add known false positives to a baseline file so future scans can ignore them.
 
 ```bash
-# Inspect fingerprints
+# Scan and add all current findings to the baseline
+secretlens baseline update .
+
+# List registered fingerprints
+secretlens baseline list
+
+# Inspect fingerprints of the current scan
 secretlens scan --format=json . | jq -r '.[].fingerprint'
 
 # Add fingerprints manually to .secretlens.baseline.json
@@ -197,11 +207,11 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # fetch full Git history
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -220,7 +230,7 @@ jobs:
             .
 
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: results.sarif
@@ -248,6 +258,7 @@ jobs:
 | `rules/aws.yaml` | AWS Access Key ID / Secret Access Key |
 | `rules/gcp.yaml` | GCP Service Account Key / API Key |
 | `rules/azure.yaml` | Azure Storage Account Key / Connection String |
+| `rules/github.yaml` | GitHub Token |
 | `rules/jwt.yaml` | JWT Token |
 | `rules/generic.yaml` | API Key / Password / Token / Private Key / Connection String |
 
@@ -279,7 +290,7 @@ secretlens/
 |   |   |-- regex/           # YAML rule loading and regex matching
 |   |   |-- entropy/         # Shannon entropy calculation
 |   |   |-- context/         # exclude test code and comments
-|   |   `-- verifier/        # live API verification for AWS / GCP / GitHub
+|   |   `-- verifier/        # live API verification (currently GitHub tokens)
 |   |-- finding/             # Finding type and scoring
 |   |-- reporter/
 |   |   |-- sarif/           # SARIF v2.1.0 output
