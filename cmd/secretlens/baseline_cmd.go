@@ -2,13 +2,16 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"github.com/nobuo-miura/SecretLens/internal/baseline"
-	"github.com/nobuo-miura/SecretLens/internal/detector/regex"
+	"github.com/nobuo-miura/SecretLens/internal/scanner"
+)
+
+var (
+	flagBLFile     string
+	flagBLRulesDir string
 )
 
 var baselineCmd = &cobra.Command{
@@ -20,7 +23,7 @@ var baselineListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "登録済みfingerprintを一覧表示",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		bl, err := baseline.Load(baseline.DefaultFile)
+		bl, err := baseline.Load(flagBLFile)
 		if err != nil {
 			return err
 		}
@@ -37,11 +40,44 @@ var baselineListCmd = &cobra.Command{
 }
 
 var baselineUpdateCmd = &cobra.Command{
-	Use:   "update",
+	Use:   "update [path]",
 	Short: "現在のスキャン結果をベースラインに追加",
-	Long:  "scan コマンドの出力をベースラインに追加します。先に scan --format=json を実行してください。",
+	Long:  "指定パス（省略時はカレントディレクトリ）をスキャンし、検出された全fingerprintをベースラインに追加して保存します。",
+	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("使用方法: secretlens scan --format=json | jq -r '.[].fingerprint' でfingerprintを取得し、baseline updateで登録してください。")
+		repoPath := "."
+		if len(args) > 0 {
+			repoPath = args[0]
+		}
+
+		rules, err := loadRules(flagBLRulesDir)
+		if err != nil {
+			return err
+		}
+
+		bl, err := baseline.Load(flagBLFile)
+		if err != nil {
+			return err
+		}
+
+		// 既存baselineでのフィルタは有効のまま実行し、新規検出分だけを追加する
+		findings, err := scanner.Run(scanner.Options{
+			Source:       "all",
+			RepoPath:     repoPath,
+			Rules:        rules,
+			BaselineFile: flagBLFile,
+		})
+		if err != nil {
+			return err
+		}
+
+		for _, f := range findings {
+			bl.Add(f.Fingerprint)
+		}
+		if err := bl.Save(); err != nil {
+			return err
+		}
+		fmt.Printf("ベースラインを更新しました: %d件追加 (合計%d件) → %s\n", len(findings), len(bl.List()), flagBLFile)
 		return nil
 	},
 }
@@ -56,24 +92,9 @@ var rulesListCmd = &cobra.Command{
 	Short: "有効ルール一覧を表示",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		rulesDir, _ := cmd.Flags().GetString("rules-dir")
-		if rulesDir == "" {
-			exe, err := os.Executable()
-			if err != nil {
-				exe = "."
-			}
-			rulesDir = filepath.Join(filepath.Dir(exe), "rules")
-			if _, err := os.Stat(rulesDir); os.IsNotExist(err) {
-				rulesDir = "rules"
-			}
-		}
-
-		rules, err := regex.LoadRulesFromDir(rulesDir)
+		rules, err := loadRules(rulesDir)
 		if err != nil {
 			return err
-		}
-		if len(rules) == 0 {
-			fmt.Printf("ルールが見つかりません: %s\n", rulesDir)
-			return nil
 		}
 		fmt.Printf("%-30s %-10s %s\n", "ID", "SEVERITY", "NAME")
 		fmt.Printf("%-30s %-10s %s\n", "---", "--------", "----")
@@ -86,11 +107,13 @@ var rulesListCmd = &cobra.Command{
 }
 
 func init() {
+	baselineCmd.PersistentFlags().StringVar(&flagBLFile, "baseline", baseline.DefaultFile, "ベースラインファイルパス")
+	baselineUpdateCmd.Flags().StringVar(&flagBLRulesDir, "rules-dir", "", "追加・上書きYAMLルールディレクトリ（省略時は内蔵ルールのみ）")
 	baselineCmd.AddCommand(baselineListCmd)
 	baselineCmd.AddCommand(baselineUpdateCmd)
 	rootCmd.AddCommand(baselineCmd)
 
-	rulesListCmd.Flags().String("rules-dir", "", "YAMLルールディレクトリ（デフォルト: 実行ファイル隣のrules/）")
+	rulesListCmd.Flags().String("rules-dir", "", "追加・上書きYAMLルールディレクトリ（省略時は内蔵ルールのみ）")
 	rulesCmd.AddCommand(rulesListCmd)
 	rootCmd.AddCommand(rulesCmd)
 }

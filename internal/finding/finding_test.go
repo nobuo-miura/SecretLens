@@ -23,9 +23,9 @@ func TestMaskSecret(t *testing.T) {
 }
 
 func TestComputeFingerprint(t *testing.T) {
-	fp1 := ComputeFingerprint("rule1", "file.go", 10, "secret")
-	fp2 := ComputeFingerprint("rule1", "file.go", 10, "secret")
-	fp3 := ComputeFingerprint("rule2", "file.go", 10, "secret")
+	fp1 := ComputeFingerprint("rule1", "file.go", "secret")
+	fp2 := ComputeFingerprint("rule1", "file.go", "secret")
+	fp3 := ComputeFingerprint("rule2", "file.go", "secret")
 	assert.Equal(t, fp1, fp2)
 	assert.NotEqual(t, fp1, fp3)
 }

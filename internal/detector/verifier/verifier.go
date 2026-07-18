@@ -81,27 +81,6 @@ func VerifyAWSAccessKey(ctx context.Context, accessKeyID, secretAccessKey string
 	return Result{Message: fmt.Sprintf("AWS認証情報が無効です (HTTP %d)", resp.StatusCode)}
 }
 
-// VerifyGCPAPIKey はGCP APIキーを検証する
-func VerifyGCPAPIKey(ctx context.Context, apiKey string) Result {
-	url := fmt.Sprintf("https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=%s", apiKey)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return Result{Message: fmt.Sprintf("リクエスト作成失敗: %v", err)}
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return Result{Message: fmt.Sprintf("GCP API接続失敗: %v", err)}
-	}
-	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, resp.Body)
-
-	if resp.StatusCode == http.StatusOK {
-		return Result{Valid: true, Message: "GCP APIキーが有効です"}
-	}
-	return Result{Message: fmt.Sprintf("GCP APIキーが無効です (HTTP %d)", resp.StatusCode)}
-}
-
 // VerifyGitHubToken はGitHubトークンをUsers APIで検証する
 func VerifyGitHubToken(ctx context.Context, token string) Result {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user", nil)
@@ -124,20 +103,19 @@ func VerifyGitHubToken(ctx context.Context, token string) Result {
 	return Result{Message: fmt.Sprintf("GitHubトークンが無効です (HTTP %d)", resp.StatusCode)}
 }
 
-// Verify はルールIDとマッチした値を受け取り、対応するLive検証を実行する
-func Verify(ctx context.Context, ruleID, matched string) Result {
-	switch {
-	case strings.HasPrefix(ruleID, "aws-access-key"):
-		// AWS Access Key IDはそのまま使用（シークレットキーは別途必要）
+// Verify はルールYAMLで明示されたverify.typeとraw値を受け取り、対応するLive検証を実行する。
+// 検証先はルール側の宣言のみで決まり、ルールIDからの推測は行わない
+func Verify(ctx context.Context, verifyType, secret string) Result {
+	switch verifyType {
+	case "aws":
+		// AWS検証はアクセスキーIDとシークレットキーのペアが必要で、単一マッチでは実行できない
 		return Result{Message: "AWS検証はアクセスキーIDとシークレットキーの両方が必要です"}
-	case ruleID == "aws-secret-access-key":
-		return Result{Message: "AWS検証はアクセスキーIDとシークレットキーの組み合わせが必要です"}
-	case strings.HasPrefix(ruleID, "gcp-api-key"):
-		return VerifyGCPAPIKey(ctx, matched)
-	case strings.HasPrefix(ruleID, "github") || strings.Contains(ruleID, "token"):
-		return VerifyGitHubToken(ctx, matched)
-	default:
+	case "github-token":
+		return VerifyGitHubToken(ctx, secret)
+	case "":
 		return Result{Message: "このルールはLive検証に対応していません"}
+	default:
+		return Result{Message: fmt.Sprintf("未対応のverify.typeです: %s", verifyType)}
 	}
 }
 
@@ -151,4 +129,3 @@ func hmacSHA256(key []byte, data string) []byte {
 	h.Write([]byte(data))
 	return h.Sum(nil)
 }
-

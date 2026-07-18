@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/nobuo-miura/SecretLens/internal/baseline"
+	"github.com/nobuo-miura/SecretLens/internal/detector/regex"
 	"github.com/nobuo-miura/SecretLens/internal/detector/verifier"
 	"github.com/nobuo-miura/SecretLens/internal/finding"
 	reportgithub "github.com/nobuo-miura/SecretLens/internal/reporter/github"
@@ -40,10 +42,10 @@ var (
 	flagImage string
 
 	// 出力先
-	flagGitHubToken   string
-	flagGitHubPR      int
-	flagGitHubSHA     string
-	flagSlackWebhook  string
+	flagGitHubToken  string
+	flagGitHubPR     int
+	flagGitHubSHA    string
+	flagSlackWebhook string
 
 	// verifier
 	flagVerify bool
@@ -62,7 +64,7 @@ func init() {
 	scanCmd.Flags().StringVar(&flagFormat, "format", "text", "出力フォーマット (text|json|sarif|html|github-pr)")
 	scanCmd.Flags().StringVar(&flagOut, "out", "", "出力ファイルパス（省略時はstdout）")
 	scanCmd.Flags().StringVar(&flagFailOn, "fail-on", "", "指定したSeverity以上で終了コード1 (CRITICAL|HIGH|MEDIUM|LOW)")
-	scanCmd.Flags().StringVar(&flagRulesDir, "rules-dir", "", "YAMLルールディレクトリ（デフォルト: 実行ファイル隣のrules/）")
+	scanCmd.Flags().StringVar(&flagRulesDir, "rules-dir", "", "追加・上書きYAMLルールディレクトリ（省略時は内蔵ルールのみ）")
 	scanCmd.Flags().StringVar(&flagBaseline, "baseline", baseline.DefaultFile, "ベースラインファイルパス")
 
 	// CIログ
@@ -85,6 +87,18 @@ func init() {
 	rootCmd.AddCommand(scanCmd)
 }
 
+var validSources = map[string]bool{
+	"": true, "git": true, "envfile": true, "all": true, "cilog": true, "docker": true,
+}
+
+var validFormats = map[string]bool{
+	"text": true, "json": true, "sarif": true, "html": true, "github-pr": true,
+}
+
+var validFailOn = map[string]bool{
+	"": true, "CRITICAL": true, "HIGH": true, "MEDIUM": true, "LOW": true,
+}
+
 func runScan(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
@@ -93,25 +107,37 @@ func runScan(cmd *cobra.Command, args []string) error {
 		repoPath = args[0]
 	}
 
-	rulesDir := resolveRulesDir(repoPath)
 	source := flagSource
 	if flagAll {
 		source = "all"
 	}
+	if !validSources[source] {
+		return fmt.Errorf("不正な --source です: %q (git|envfile|all|cilog|docker)", source)
+	}
+	if !validFormats[flagFormat] {
+		return fmt.Errorf("不正な --format です: %q (text|json|sarif|html|github-pr)", flagFormat)
+	}
+	if !validFailOn[strings.ToUpper(flagFailOn)] {
+		return fmt.Errorf("不正な --fail-on です: %q (CRITICAL|HIGH|MEDIUM|LOW)", flagFailOn)
+	}
+
+	rules, err := loadRules(flagRulesDir)
+	if err != nil {
+		return err
+	}
 
 	var findings []finding.Finding
-	var err error
 
 	switch source {
 	case "cilog":
-		findings, err = scanCILog(ctx, rulesDir)
+		findings, err = scanCILog(ctx, rules)
 	case "docker":
-		findings, err = scanDockerImage(rulesDir)
+		findings, err = scanDockerImage(rules)
 	default:
 		opts := scanner.Options{
 			Source:       source,
 			RepoPath:     repoPath,
-			RulesDir:     rulesDir,
+			Rules:        rules,
 			BaselineFile: flagBaseline,
 			Format:       flagFormat,
 			FailOn:       flagFailOn,
@@ -125,6 +151,11 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// Live検証 (opt-in)
 	if flagVerify {
 		findings = runVerification(ctx, findings)
+	}
+
+	// raw値は検証以外の用途に使わせない。出力前に必ずクリアする
+	for i := range findings {
+		findings[i].Secret = ""
 	}
 
 	if err := outputFindings(ctx, findings, repoPath); err != nil {
@@ -142,30 +173,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func resolveRulesDir(repoPath string) string {
-	if flagRulesDir != "" {
-		return flagRulesDir
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		exe = "."
-	}
-	d := filepath.Join(filepath.Dir(exe), "rules")
-	if _, err := os.Stat(d); os.IsNotExist(err) {
-		d = filepath.Join(repoPath, "rules")
-	}
-	return d
-}
-
-func scanCILog(ctx context.Context, rulesDir string) ([]finding.Finding, error) {
+func scanCILog(ctx context.Context, rules []regex.Rule) ([]finding.Finding, error) {
 	token := flagGitHubToken
 	if token == "" {
 		token = os.Getenv("GITHUB_TOKEN")
-	}
-
-	rules, err := loadRules(rulesDir)
-	if err != nil {
-		return nil, err
 	}
 
 	ch := make(chan cilog.LogLine, 200)
@@ -191,22 +202,23 @@ func scanCILog(ctx context.Context, rulesDir string) ([]finding.Finding, error) 
 	return matchCILog(ch, rules), scanErr
 }
 
-func scanDockerImage(rulesDir string) ([]finding.Finding, error) {
+func scanDockerImage(rules []regex.Rule) ([]finding.Finding, error) {
 	if flagImage == "" {
 		return nil, fmt.Errorf("dockerスキャンには --image が必要です")
 	}
-	rules, err := loadRules(rulesDir)
-	if err != nil {
-		return nil, err
-	}
 
 	ch := make(chan docker.FileLine, 200)
+	var scanErr error
 	go func() {
 		defer close(ch)
-		docker.StreamLayers(flagImage, ch) //nolint:errcheck
+		scanErr = docker.StreamLayers(flagImage, ch)
 	}()
 
-	return matchDockerLines(ch, rules), nil
+	findings := matchDockerLines(ch, rules)
+	if scanErr != nil {
+		return nil, fmt.Errorf("dockerイメージスキャン失敗: %w", scanErr)
+	}
+	return findings, nil
 }
 
 func outputFindings(ctx context.Context, findings []finding.Finding, repoPath string) error {
@@ -275,14 +287,14 @@ func outputFindings(ctx context.Context, findings []finding.Finding, repoPath st
 	case "github-pr":
 		// 既に上で処理済み
 	default:
-		printText(findings)
+		printText(out, findings)
 	}
 	return nil
 }
 
-func printText(findings []finding.Finding) {
+func printText(out io.Writer, findings []finding.Finding) {
 	if len(findings) == 0 {
-		fmt.Println("シークレットは検出されませんでした。")
+		_, _ = fmt.Fprintln(out, "シークレットは検出されませんでした。")
 		return
 	}
 	for _, f := range findings {
@@ -290,14 +302,14 @@ func printText(findings []finding.Finding) {
 		if f.Verified {
 			verified = " [VERIFIED]"
 		}
-		fmt.Printf("[%s]%s %s  %s:%d  rule=%s  score=%d  fingerprint=%s\n",
+		_, _ = fmt.Fprintf(out, "[%s]%s %s  %s:%d  rule=%s  score=%d  fingerprint=%s\n",
 			f.Severity, verified, f.Source, f.File, f.Line, f.RuleID, f.Score, f.Fingerprint[:16])
-		fmt.Printf("  match: %s\n", f.Match)
+		_, _ = fmt.Fprintf(out, "  match: %s\n", f.Match)
 		if f.Commit != "" {
-			fmt.Printf("  commit: %s\n", f.Commit)
+			_, _ = fmt.Fprintf(out, "  commit: %s\n", f.Commit)
 		}
 	}
-	fmt.Printf("\n合計: %d件\n", len(findings))
+	_, _ = fmt.Fprintf(out, "\n合計: %d件\n", len(findings))
 }
 
 func severityGTE(a, b finding.Severity) bool {
@@ -314,7 +326,11 @@ func runVerification(ctx context.Context, findings []finding.Finding) []finding.
 	result := make([]finding.Finding, len(findings))
 	copy(result, findings)
 	for i, f := range result {
-		r := verifier.Verify(ctx, f.RuleID, f.Match)
+		// 検証先はルールYAMLのverify.typeで明示されたもののみ。raw値を渡す
+		if f.VerifyType == "" || f.Secret == "" {
+			continue
+		}
+		r := verifier.Verify(ctx, f.VerifyType, f.Secret)
 		if r.Valid {
 			result[i].Verified = true
 			result[i].Score += finding.ScoreVerified

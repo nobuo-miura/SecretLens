@@ -3,6 +3,7 @@ module github.com/nobuo-miura/SecretLens
 go 1.26.4
 
 require (
+	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/google/go-github/v72 v72.0.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1

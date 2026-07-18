@@ -10,8 +10,8 @@ import (
 )
 
 type block struct {
-	Type string    `json:"type"`
-	Text *textObj  `json:"text,omitempty"`
+	Type string   `json:"type"`
+	Text *textObj `json:"text,omitempty"`
 }
 
 type textObj struct {
