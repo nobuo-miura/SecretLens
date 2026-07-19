@@ -51,11 +51,14 @@ func matchCILog(ch <-chan cilog.LogLine, rules []regex.Rule) []finding.Finding {
 	return findings
 }
 
-func matchDockerLines(ch <-chan docker.FileLine, rules []regex.Rule) []finding.Finding {
+func matchDockerLines(ch <-chan docker.FileLine, rules []regex.Rule, exclude []string) []finding.Finding {
 	var findings []finding.Finding
 	idCounter := 0
 	for line := range ch {
 		if detctx.IsCommentLine(line.Text) {
+			continue
+		}
+		if detctx.MatchesExcludePattern(line.File, exclude) {
 			continue
 		}
 		for _, rule := range rules {

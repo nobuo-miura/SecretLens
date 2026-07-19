@@ -15,12 +15,19 @@ import (
 )
 
 type Options struct {
-	Source       string // "git" | "envfile" | "all"（空は"all"扱い）
+	Source       string // "git" | "envfile" | "all"（空は"all"扱い） | "worktree" | "staged"
 	RepoPath     string
 	Rules        []regex.Rule
 	BaselineFile string
 	Format       string // "sarif" | "json" | "text"
 	FailOn       string // "CRITICAL" | "HIGH" | "MEDIUM" | "LOW"
+
+	// 履歴スキャンの範囲指定（source=git/all時のみ有効）
+	Since       string // <since>..HEAD をスキャン
+	CommitRange string // base..head 形式
+
+	// 全ルール共通のグローバル除外globパターン
+	Exclude []string
 }
 
 // Run はスキャンを実行してFinding一覧を返す
@@ -53,8 +60,24 @@ func Run(opts Options) ([]finding.Finding, error) {
 	if source == "" {
 		source = "all"
 	}
+	switch source {
+	case "worktree", "staged":
+		diffFindings, err := scanGitStream(opts, gitscanner.StreamOptions{Mode: source}, source)
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range diffFindings {
+			addFinding(f)
+		}
+		return findings, nil
+	}
 	if source == "git" || source == "all" {
-		gitFindings, err := scanGit(opts.RepoPath, rules)
+		streamOpts := gitscanner.StreamOptions{
+			Mode:        "history",
+			Since:       opts.Since,
+			CommitRange: opts.CommitRange,
+		}
+		gitFindings, err := scanGitStream(opts, streamOpts, "git")
 		if err != nil {
 			return nil, err
 		}
@@ -63,7 +86,7 @@ func Run(opts Options) ([]finding.Finding, error) {
 		}
 	}
 	if source == "envfile" || source == "all" {
-		envFindings, err := scanEnvfile(opts.RepoPath, rules)
+		envFindings, err := scanEnvfile(opts, rules)
 		if err != nil {
 			return nil, err
 		}
@@ -131,12 +154,12 @@ func scoreAndBuild(rule regex.Rule, source, file string, line int, matched, comm
 	return f
 }
 
-func scanGit(repoPath string, rules []regex.Rule) ([]finding.Finding, error) {
+func scanGitStream(opts Options, streamOpts gitscanner.StreamOptions, sourceLabel string) ([]finding.Finding, error) {
 	ch := make(chan gitscanner.DiffLine, 100)
 	var scanErr error
 	go func() {
 		defer close(ch)
-		scanErr = gitscanner.Stream(repoPath, ch)
+		scanErr = gitscanner.Stream(opts.RepoPath, streamOpts, ch)
 	}()
 
 	var findings []finding.Finding
@@ -144,13 +167,16 @@ func scanGit(repoPath string, rules []regex.Rule) ([]finding.Finding, error) {
 		if detctx.IsCommentLine(dl.Text) {
 			continue
 		}
-		for _, rule := range rules {
+		if detctx.MatchesExcludePattern(dl.File, opts.Exclude) {
+			continue
+		}
+		for _, rule := range opts.Rules {
 			if detctx.MatchesExcludePattern(dl.File, rule.ContextExclude) {
 				continue
 			}
 			matches := rule.Match(dl.Text)
 			for _, m := range matches {
-				f := scoreAndBuild(rule, "git", dl.File, dl.Line, m, dl.Commit)
+				f := scoreAndBuild(rule, sourceLabel, dl.File, dl.Line, m, dl.Commit)
 				findings = append(findings, f)
 			}
 		}
@@ -158,8 +184,8 @@ func scanGit(repoPath string, rules []regex.Rule) ([]finding.Finding, error) {
 	return findings, scanErr
 }
 
-func scanEnvfile(repoPath string, rules []regex.Rule) ([]finding.Finding, error) {
-	lines, err := envfile.ScanDir(repoPath)
+func scanEnvfile(opts Options, rules []regex.Rule) ([]finding.Finding, error) {
+	lines, err := envfile.ScanDir(opts.RepoPath)
 	if err != nil {
 		return nil, err
 	}
@@ -170,8 +196,11 @@ func scanEnvfile(repoPath string, rules []regex.Rule) ([]finding.Finding, error)
 			continue
 		}
 		relPath := l.File
-		if abs, err := filepath.Rel(repoPath, l.File); err == nil {
+		if abs, err := filepath.Rel(opts.RepoPath, l.File); err == nil {
 			relPath = abs
+		}
+		if detctx.MatchesExcludePattern(relPath, opts.Exclude) {
+			continue
 		}
 		for _, rule := range rules {
 			if detctx.MatchesExcludePattern(relPath, rule.ContextExclude) {
