@@ -53,6 +53,15 @@ secretlens scan --format=html --out=report.html .
 
 # 検出時にCI終了コード1を返す
 secretlens scan --fail-on=HIGH .
+
+# ステージ済み差分のみスキャン（pre-commit用）
+secretlens scan --staged .
+
+# 作業ツリーの未コミット変更（追跡済みファイル）をスキャン
+secretlens scan --source=worktree .
+
+# ブランチで新しく追加されたコミットだけスキャン（CIのPRスキャン高速化）
+secretlens scan --commit-range=origin/main..HEAD .
 ```
 
 ---
@@ -64,7 +73,11 @@ secretlens scan --fail-on=HIGH .
 | フラグ | 説明 | デフォルト |
 |--------|------|-----------|
 | `--all` | Git履歴 + 環境変数ファイルをスキャン | false |
-| `--source` | スキャンソース: `git` `envfile` `all` `cilog` `docker` | git+envfile |
+| `--source` | スキャンソース: `git` `envfile` `all` `worktree` `staged` `cilog` `docker` | git+envfile |
+| `--staged` | ステージ済み差分のみスキャン（`--source=staged`の別名、pre-commit用） | false |
+| `--since` | 指定コミット以降の履歴のみスキャン（`<commit>..HEAD`） | — |
+| `--commit-range` | 指定範囲の履歴のみスキャン（`base..head`形式） | — |
+| `--config` | 設定ファイルパス（省略時はスキャン対象直下の`.secretlens.yml`を自動探索） | — |
 | `--format` | 出力形式: `text` `json` `sarif` `html` `github-pr` | text |
 | `--out` | 出力ファイルパス（省略時: stdout） | — |
 | `--fail-on` | 指定Severity以上で exit 1: `CRITICAL` `HIGH` `MEDIUM` `LOW` | — |
@@ -168,6 +181,39 @@ rules:
 | `entropy_min` | float | 最低エントロピー閾値（省略可） |
 | `context_exclude` | []string | 除外globパターン（省略可） |
 | `tags` | []string | タグ（省略可） |
+
+---
+
+## 設定ファイル
+
+スキャン対象ディレクトリ直下に`.secretlens.yml`（または`.secretlens.yaml`）を置くか`--config`で指定すると、CIとローカルで同じ設定を共有できます。CLIで明示指定したフラグが常に設定ファイルより優先されます。
+
+```yaml
+# .secretlens.yml
+source: all
+format: sarif
+out: results.sarif
+fail_on: HIGH
+rules_dir: ./custom-rules
+baseline: .secretlens.baseline.json
+exclude:                 # 全ルール共通の除外glob（git / worktree / staged / envfile / docker スキャンに適用）
+  - "**/vendor/**"
+  - "**/testdata/**"
+```
+
+注意点:
+
+- 相対パス（`rules_dir` / `baseline` / `out`）は設定ファイルのディレクトリ基準で解決されます。
+- `out`は`--config`で明示指定した場合のみ適用されます。自動検出した設定はスキャン対象リポジトリ由来のため、出力先を握らせないための制限です。
+- Slack Webhook URLはそれ自体がシークレットのため、設定ファイルでは意図的に**非対応**です。`--slack-webhook`フラグまたは`SLACK_WEBHOOK_URL`環境変数を使ってください。
+
+### pre-commit hook
+
+```bash
+#!/bin/sh
+# .git/hooks/pre-commit
+exec secretlens scan --staged --fail-on=HIGH .
+```
 
 ---
 

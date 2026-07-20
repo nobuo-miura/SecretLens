@@ -53,6 +53,15 @@ secretlens scan --format=html --out=report.html .
 
 # Return exit code 1 when findings meet the severity threshold
 secretlens scan --fail-on=HIGH .
+
+# Scan staged changes only (pre-commit)
+secretlens scan --staged .
+
+# Scan uncommitted changes to tracked files in the working tree
+secretlens scan --source=worktree .
+
+# Scan only the commits new to this branch (fast PR scans in CI)
+secretlens scan --commit-range=origin/main..HEAD .
 ```
 
 ---
@@ -64,7 +73,11 @@ secretlens scan --fail-on=HIGH .
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--all` | Scan Git history and environment files | false |
-| `--source` | Scan source: `git` `envfile` `all` `cilog` `docker` | git+envfile |
+| `--source` | Scan source: `git` `envfile` `all` `worktree` `staged` `cilog` `docker` | git+envfile |
+| `--staged` | Scan staged changes only (alias for `--source=staged`, for pre-commit) | false |
+| `--since` | Scan history from the given commit only (`<commit>..HEAD`) | - |
+| `--commit-range` | Scan the given commit range only (`base..head`) | - |
+| `--config` | Config file path (auto-detects `.secretlens.yml` in the scan target) | - |
 | `--format` | Output format: `text` `json` `sarif` `html` `github-pr` | text |
 | `--out` | Output file path. Writes to stdout when omitted | - |
 | `--fail-on` | Exit with code 1 at or above severity: `CRITICAL` `HIGH` `MEDIUM` `LOW` | - |
@@ -168,6 +181,39 @@ rules:
 | `entropy_min` | float | Minimum entropy threshold (optional) |
 | `context_exclude` | []string | Exclusion glob patterns (optional) |
 | `tags` | []string | Tags (optional) |
+
+---
+
+## Configuration File
+
+Place `.secretlens.yml` (or `.secretlens.yaml`) in the scan target directory, or pass `--config`, to share the same settings between CI and local runs. Explicitly passed CLI flags always take precedence over the config file.
+
+```yaml
+# .secretlens.yml
+source: all
+format: sarif
+out: results.sarif
+fail_on: HIGH
+rules_dir: ./custom-rules
+baseline: .secretlens.baseline.json
+exclude:                 # global exclude globs, applied to git / worktree / staged / envfile / docker scans
+  - "**/vendor/**"
+  - "**/testdata/**"
+```
+
+Notes:
+
+- Relative paths (`rules_dir`, `baseline`, `out`) are resolved relative to the config file's directory.
+- `out` is only applied when the config file is passed explicitly via `--config`. Auto-detected configs come from the scanned repository, which must not be able to choose where results are written.
+- The Slack webhook URL is itself a secret and is intentionally **not** supported in the config file — use the `--slack-webhook` flag or the `SLACK_WEBHOOK_URL` environment variable.
+
+### pre-commit hook
+
+```bash
+#!/bin/sh
+# .git/hooks/pre-commit
+exec secretlens scan --staged --fail-on=HIGH .
+```
 
 ---
 

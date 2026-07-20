@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/nobuo-miura/SecretLens/internal/baseline"
+	"github.com/nobuo-miura/SecretLens/internal/config"
 	"github.com/nobuo-miura/SecretLens/internal/detector/regex"
 	"github.com/nobuo-miura/SecretLens/internal/detector/verifier"
 	"github.com/nobuo-miura/SecretLens/internal/finding"
@@ -32,6 +33,12 @@ var (
 	flagFailOn   string
 	flagRulesDir string
 	flagBaseline string
+	flagConfig   string
+
+	// 差分・増分スキャン
+	flagStaged      bool
+	flagSince       string
+	flagCommitRange string
 
 	// CIログスキャン
 	flagRepo      string // owner/repo
@@ -60,7 +67,11 @@ var scanCmd = &cobra.Command{
 
 func init() {
 	scanCmd.Flags().BoolVar(&flagAll, "all", false, "Git履歴 + 環境変数ファイルをスキャン")
-	scanCmd.Flags().StringVar(&flagSource, "source", "", "スキャンソース (git|envfile|cilog|docker)")
+	scanCmd.Flags().StringVar(&flagSource, "source", "", "スキャンソース (git|envfile|all|worktree|staged|cilog|docker)")
+	scanCmd.Flags().BoolVar(&flagStaged, "staged", false, "ステージ済み差分のみをスキャン (--source=staged の別名、pre-commit用)")
+	scanCmd.Flags().StringVar(&flagSince, "since", "", "指定コミット以降の履歴のみスキャン (<commit>..HEAD)")
+	scanCmd.Flags().StringVar(&flagCommitRange, "commit-range", "", "指定範囲の履歴のみスキャン (base..head 形式)")
+	scanCmd.Flags().StringVar(&flagConfig, "config", "", "設定ファイルパス（省略時はスキャン対象直下の .secretlens.yml を自動探索）")
 	scanCmd.Flags().StringVar(&flagFormat, "format", "text", "出力フォーマット (text|json|sarif|html|github-pr)")
 	scanCmd.Flags().StringVar(&flagOut, "out", "", "出力ファイルパス（省略時はstdout）")
 	scanCmd.Flags().StringVar(&flagFailOn, "fail-on", "", "指定したSeverity以上で終了コード1 (CRITICAL|HIGH|MEDIUM|LOW)")
@@ -88,7 +99,8 @@ func init() {
 }
 
 var validSources = map[string]bool{
-	"": true, "git": true, "envfile": true, "all": true, "cilog": true, "docker": true,
+	"": true, "git": true, "envfile": true, "all": true,
+	"worktree": true, "staged": true, "cilog": true, "docker": true,
 }
 
 var validFormats = map[string]bool{
@@ -107,12 +119,30 @@ func runScan(cmd *cobra.Command, args []string) error {
 		repoPath = args[0]
 	}
 
-	source := flagSource
-	if flagAll {
-		source = "all"
+	cfg, cfgExplicit, err := loadScanConfig(repoPath)
+	if err != nil {
+		return err
 	}
-	if !validSources[source] {
-		return fmt.Errorf("不正な --source です: %q (git|envfile|all|cilog|docker)", source)
+	applyConfig(cmd, cfg, cfgExplicit)
+
+	cliSource := ""
+	if cmd.Flags().Changed("source") {
+		cliSource = flagSource
+	}
+	cfgSource := ""
+	if cfg != nil {
+		cfgSource = cfg.Source
+	}
+	source, err := resolveSource(sourceInputs{
+		cliSource:   cliSource,
+		cfgSource:   cfgSource,
+		all:         flagAll,
+		staged:      flagStaged,
+		since:       flagSince,
+		commitRange: flagCommitRange,
+	})
+	if err != nil {
+		return err
 	}
 	if !validFormats[flagFormat] {
 		return fmt.Errorf("不正な --format です: %q (text|json|sarif|html|github-pr)", flagFormat)
@@ -126,13 +156,18 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	var exclude []string
+	if cfg != nil {
+		exclude = cfg.Exclude
+	}
+
 	var findings []finding.Finding
 
 	switch source {
 	case "cilog":
 		findings, err = scanCILog(ctx, rules)
 	case "docker":
-		findings, err = scanDockerImage(rules)
+		findings, err = scanDockerImage(rules, exclude)
 	default:
 		opts := scanner.Options{
 			Source:       source,
@@ -141,6 +176,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 			BaselineFile: flagBaseline,
 			Format:       flagFormat,
 			FailOn:       flagFailOn,
+			Since:        flagSince,
+			CommitRange:  flagCommitRange,
+			Exclude:      exclude,
 		}
 		findings, err = scanner.Run(opts)
 	}
@@ -173,6 +211,94 @@ func runScan(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// loadScanConfig は --config 指定ファイル、なければスキャン対象直下の
+// .secretlens.yml を読み込む。戻り値のboolは明示的な--config指定かどうか
+func loadScanConfig(repoPath string) (*config.Config, bool, error) {
+	if flagConfig != "" {
+		cfg, err := config.Load(flagConfig)
+		return cfg, true, err
+	}
+	cfg, err := config.LoadFromDir(repoPath)
+	return cfg, false, err
+}
+
+// applyConfig は設定ファイルの値を反映する。CLIで明示指定されたフラグが常に優先される。
+// outは出力先を握られる危険があるため、明示的な--config指定時のみ適用する
+// （自動検出した設定＝スキャン対象リポジトリ由来の可能性があるため）
+func applyConfig(cmd *cobra.Command, cfg *config.Config, explicit bool) {
+	if cfg == nil {
+		return
+	}
+	fl := cmd.Flags()
+	if !fl.Changed("format") && cfg.Format != "" {
+		flagFormat = cfg.Format
+	}
+	if explicit && !fl.Changed("out") && cfg.Out != "" {
+		flagOut = cfg.Out
+	}
+	if !fl.Changed("fail-on") && cfg.FailOn != "" {
+		flagFailOn = cfg.FailOn
+	}
+	if !fl.Changed("rules-dir") && cfg.RulesDir != "" {
+		flagRulesDir = cfg.RulesDir
+	}
+	if !fl.Changed("baseline") && cfg.Baseline != "" {
+		flagBaseline = cfg.Baseline
+	}
+}
+
+// sourceInputs はスキャンソース決定に関わる入力
+type sourceInputs struct {
+	cliSource   string // CLIで明示された--source（未指定は空）
+	cfgSource   string // 設定ファイルのsource
+	all         bool   // --all
+	staged      bool   // --staged
+	since       string // --since
+	commitRange string // --commit-range
+}
+
+// resolveSource はCLIフラグと設定ファイルからスキャンソースを決定する。
+//   - 優先順位: --staged / --all / --source（CLI） > 設定ファイル > デフォルト
+//   - --stagedはCLIの--source/--allとだけ競合チェックし、設定ファイルのsourceは上書きする
+//   - --since / --commit-range 指定時のデフォルトは git（envfileを巻き込まない）
+func resolveSource(in sourceInputs) (string, error) {
+	source := in.cliSource
+	if source == "" {
+		source = in.cfgSource
+	}
+	if in.all {
+		source = "all"
+	}
+	if in.staged {
+		if in.all {
+			return "", fmt.Errorf("--staged と --all は同時に指定できません")
+		}
+		// CLIで異なるスキャン対象が明示されている場合は黙って上書きせず競合エラーにする
+		if in.cliSource != "" && in.cliSource != "staged" {
+			return "", fmt.Errorf("--staged は --source=%s と併用できません", in.cliSource)
+		}
+		source = "staged"
+	}
+	if !validSources[source] {
+		return "", fmt.Errorf("不正な --source です: %q (git|envfile|all|worktree|staged|cilog|docker)", source)
+	}
+	if in.since != "" && in.commitRange != "" {
+		return "", fmt.Errorf("--since と --commit-range は同時に指定できません")
+	}
+	if in.since != "" || in.commitRange != "" {
+		// CLIでソースを明示していなければ、設定ファイルのsourceにかかわらずgitを使う
+		// （範囲指定の意図は履歴スキャンであり、envfile等を巻き込まない）。
+		// CLI明示時（--source / --all / --staged）のみ競合判定を行う
+		cliExplicit := in.all || in.staged || in.cliSource != ""
+		if !cliExplicit {
+			source = "git"
+		} else if source != "git" && source != "all" {
+			return "", fmt.Errorf("--since / --commit-range は履歴スキャン (git|all) 専用です (--source=%s)", source)
+		}
+	}
+	return source, nil
+}
+
 func scanCILog(ctx context.Context, rules []regex.Rule) ([]finding.Finding, error) {
 	token := flagGitHubToken
 	if token == "" {
@@ -202,7 +328,7 @@ func scanCILog(ctx context.Context, rules []regex.Rule) ([]finding.Finding, erro
 	return matchCILog(ch, rules), scanErr
 }
 
-func scanDockerImage(rules []regex.Rule) ([]finding.Finding, error) {
+func scanDockerImage(rules []regex.Rule, exclude []string) ([]finding.Finding, error) {
 	if flagImage == "" {
 		return nil, fmt.Errorf("dockerスキャンには --image が必要です")
 	}
@@ -214,7 +340,7 @@ func scanDockerImage(rules []regex.Rule) ([]finding.Finding, error) {
 		scanErr = docker.StreamLayers(flagImage, ch)
 	}()
 
-	findings := matchDockerLines(ch, rules)
+	findings := matchDockerLines(ch, rules, exclude)
 	if scanErr != nil {
 		return nil, fmt.Errorf("dockerイメージスキャン失敗: %w", scanErr)
 	}
@@ -279,6 +405,9 @@ func outputFindings(ctx context.Context, findings []finding.Finding, repoPath st
 	case "sarif":
 		return sarif.Write(out, findings)
 	case "json":
+		if findings == nil {
+			findings = []finding.Finding{} // 検出0件でも null ではなく [] を出力する
+		}
 		enc := json.NewEncoder(out)
 		enc.SetIndent("", "  ")
 		return enc.Encode(findings)
