@@ -5,14 +5,13 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 
-	gogithub "github.com/google/go-github/v72/github"
+	gogithub "github.com/google/go-github/v89/github"
 	"golang.org/x/oauth2"
 
 	"github.com/nobuo-miura/SecretLens/internal/detector/regex"
@@ -43,12 +42,15 @@ func AuditOrg(ctx context.Context, opts AuditOptions) ([]RepoResult, error) {
 		opts.Concurrency = 4
 	}
 
-	var hc *http.Client
+	var clientOpts []gogithub.ClientOptionsFunc
 	if opts.Token != "" {
 		ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: opts.Token})
-		hc = oauth2.NewClient(ctx, ts)
+		clientOpts = append(clientOpts, gogithub.WithHTTPClient(oauth2.NewClient(ctx, ts)))
 	}
-	client := gogithub.NewClient(hc)
+	client, err := gogithub.NewClient(clientOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("GitHubクライアント生成失敗: %w", err)
+	}
 
 	repos, err := listOrgRepos(ctx, client, opts.Org)
 	if err != nil {

@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	gogithub "github.com/google/go-github/v72/github"
+	gogithub "github.com/google/go-github/v89/github"
 	"golang.org/x/oauth2"
 )
 
@@ -19,17 +19,21 @@ type GitHubActionsScanner struct {
 }
 
 // NewGitHubActionsScanner はGitHub Actionsログスキャナーを生成する
-func NewGitHubActionsScanner(token, owner, repo string) *GitHubActionsScanner {
-	var hc *http.Client
+func NewGitHubActionsScanner(token, owner, repo string) (*GitHubActionsScanner, error) {
+	var opts []gogithub.ClientOptionsFunc
 	if token != "" {
 		ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-		hc = oauth2.NewClient(context.Background(), ts)
+		opts = append(opts, gogithub.WithHTTPClient(oauth2.NewClient(context.Background(), ts)))
+	}
+	client, err := gogithub.NewClient(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("GitHubクライアント生成失敗: %w", err)
 	}
 	return &GitHubActionsScanner{
-		client: gogithub.NewClient(hc),
+		client: client,
 		Owner:  owner,
 		Repo:   repo,
-	}
+	}, nil
 }
 
 // LogLine はCIログの1行を表す
