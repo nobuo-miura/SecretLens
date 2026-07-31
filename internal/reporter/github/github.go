@@ -3,11 +3,10 @@ package github
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
-	gogithub "github.com/google/go-github/v72/github"
+	gogithub "github.com/google/go-github/v89/github"
 	"golang.org/x/oauth2"
 
 	"github.com/nobuo-miura/SecretLens/internal/finding"
@@ -21,17 +20,21 @@ type Reporter struct {
 }
 
 // New はGitHub Reporterを生成する
-func New(token, owner, repo string) *Reporter {
-	var hc *http.Client
+func New(token, owner, repo string) (*Reporter, error) {
+	var opts []gogithub.ClientOptionsFunc
 	if token != "" {
 		ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-		hc = oauth2.NewClient(context.Background(), ts)
+		opts = append(opts, gogithub.WithHTTPClient(oauth2.NewClient(context.Background(), ts)))
+	}
+	client, err := gogithub.NewClient(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("GitHubクライアント生成失敗: %w", err)
 	}
 	return &Reporter{
-		client: gogithub.NewClient(hc),
+		client: client,
 		Owner:  owner,
 		Repo:   repo,
-	}
+	}, nil
 }
 
 // PostPRComment はプルリクエストにスキャン結果をコメントとして投稿する

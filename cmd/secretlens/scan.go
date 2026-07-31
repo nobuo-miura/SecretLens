@@ -309,18 +309,23 @@ func scanCILog(ctx context.Context, rules []regex.Rule) ([]finding.Finding, erro
 	var scanErr error
 	go func() {
 		defer close(ch)
-		if flagRepo != "" {
+		switch {
+		case flagRepo != "":
 			parts := strings.SplitN(flagRepo, "/", 2)
 			if len(parts) != 2 {
 				scanErr = fmt.Errorf("--repo は owner/repo 形式で指定してください")
 				return
 			}
-			s := cilog.NewGitHubActionsScanner(token, parts[0], parts[1])
+			s, err := cilog.NewGitHubActionsScanner(token, parts[0], parts[1])
+			if err != nil {
+				scanErr = err
+				return
+			}
 			scanErr = s.StreamLogs(ctx, ch)
-		} else if flagProjectID != "" {
+		case flagProjectID != "":
 			s := cilog.NewGitLabCIScanner(flagGitLabURL, token, flagProjectID)
 			scanErr = s.StreamLogs(ctx, ch)
-		} else {
+		default:
 			scanErr = fmt.Errorf("cilogスキャンには --repo (GitHub) または --project-id (GitLab) が必要です")
 		}
 	}()
@@ -366,7 +371,10 @@ func outputFindings(ctx context.Context, findings []finding.Finding, repoPath st
 		if len(parts) != 2 {
 			return fmt.Errorf("--repo は owner/repo 形式で指定してください")
 		}
-		r := reportgithub.New(token, parts[0], parts[1])
+		r, err := reportgithub.New(token, parts[0], parts[1])
+		if err != nil {
+			return err
+		}
 		if flagGitHubPR > 0 {
 			if err := r.PostPRComment(ctx, flagGitHubPR, findings); err != nil {
 				return err
